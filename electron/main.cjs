@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, session, desktopCapturer } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, session, desktopCapturer, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -15,6 +15,18 @@ function readSettings() {
   } catch {
     return {};
   }
+}
+
+// The app used to be called "Sound Recorder". Bring its settings (save folder) over once.
+function migrateOldSettings() {
+  const appData = app.getPath('appData');
+  if (app.getPath('userData') !== path.join(appData, 'Recdrop')) return; // custom profile (e.g. tests)
+  const oldFile = path.join(appData, 'Sound Recorder', 'settings.json');
+  if (fs.existsSync(settingsPath()) || !fs.existsSync(oldFile)) return;
+  try {
+    fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
+    fs.copyFileSync(oldFile, settingsPath());
+  } catch {}
 }
 
 function writeSettings(patch) {
@@ -56,6 +68,18 @@ function uniquePath(dir, base, ext) {
   return candidate;
 }
 
+// Where recordings go. If none is set yet (or the folder was deleted), use Music\Recdrop.
+function saveDir() {
+  const dir = readSettings().saveDir || path.join(app.getPath('music'), 'Recdrop');
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+  } catch {
+    throw new Error(`The save folder "${dir}" isn't available. Choose another folder in Options (gear icon), then save.`);
+  }
+  if (readSettings().saveDir !== dir) writeSettings({ saveDir: dir });
+  return dir;
+}
+
 async function pickFolder(win, title) {
   const res = await dialog.showOpenDialog(win, {
     title,
@@ -74,7 +98,7 @@ function createWindow() {
     minWidth: 560,
     minHeight: 460,
     backgroundColor: '#0e0f13',
-    title: 'Sound Recorder',
+    title: 'Recdrop',
     // build/ isn't packaged; the installed app uses the icon embedded in the .exe instead.
     icon: isDev ? path.join(__dirname, '..', 'build', 'icon.png') : undefined,
     titleBarStyle: 'hidden',
@@ -101,6 +125,8 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  migrateOldSettings();
+
   // Allow microphone access for our own window.
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => {
     cb(permission === 'media' || permission === 'display-capture');
@@ -124,7 +150,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => app.quit());
 
 // ---------- IPC ----------
-ipcMain.handle('settings:get', () => readSettings());
+ipcMain.handle('settings:get', () => ({ ...readSettings(), saveDir: saveDir() }));
 
 ipcMain.handle('settings:chooseFolder', async (e) => {
   const win = BrowserWindow.fromWebContents(e.sender);
@@ -135,40 +161,110 @@ ipcMain.handle('settings:chooseFolder', async (e) => {
 
 ipcMain.handle('file:showInFolder', (_e, filePath) => shell.showItemInFolder(filePath));
 
-ipcMain.handle('file:save', async (e, { wavBuffer, name, format }) => {
-  const win = BrowserWindow.fromWebContents(e.sender);
-  let { saveDir } = readSettings();
-
-  // First save (or folder was deleted): ask once, then remember it.
-  if (!saveDir || !fs.existsSync(saveDir)) {
-    saveDir = await pickFolder(win, 'Choose where to save your recordings');
-    if (!saveDir) return { canceled: true };
-    writeSettings({ saveDir });
-  }
-
+// Saves audio (sent as WAV) as MP3 / MP4 / WAV.
+// With `replacePath`, the new file replaces that one (same name; extension follows the format).
+ipcMain.handle('file:save', async (_e, { wavBuffer, name, format, replacePath }) => {
   const ext = ['mp3', 'mp4', 'wav'].includes(format) ? format : 'mp3';
-  const base = cleanName(name) || defaultName();
-  const outPath = uniquePath(saveDir, base, ext);
-  const wav = Buffer.from(wavBuffer);
-
-  if (ext === 'wav') {
-    fs.writeFileSync(outPath, wav);
+  let outPath;
+  if (replacePath) {
+    const { dir, name: base } = path.parse(replacePath);
+    outPath = path.join(dir, `${base}.${ext}`);
+    if (!samePath(outPath, replacePath) && fs.existsSync(outPath)) outPath = uniquePath(dir, base, ext);
   } else {
-    const tmp = path.join(os.tmpdir(), `sound-recorder-${Date.now()}.wav`);
-    fs.writeFileSync(tmp, wav);
-    try {
-      const codec =
-        ext === 'mp3'
-          ? ['-c:a', 'libmp3lame', '-b:a', '320k'] // highest MP3 quality
-          : ['-c:a', 'aac', '-b:a', '256k', '-movflags', '+faststart'];
-      await runFfmpeg(['-y', '-hide_banner', '-loglevel', 'error', '-i', tmp, '-vn', ...codec, outPath]);
-    } finally {
-      fs.rmSync(tmp, { force: true });
-    }
+    outPath = uniquePath(saveDir(), cleanName(name) || defaultName(), ext);
   }
 
-  return { canceled: false, filePath: outPath };
+  // Write to a temp file first, then move it into place, so a failed save never destroys the old file.
+  const tmpOut = path.join(path.dirname(outPath), `.recdrop-${Date.now()}.${ext}`);
+  const wav = Buffer.from(wavBuffer);
+  try {
+    if (ext === 'wav') {
+      fs.writeFileSync(tmpOut, wav);
+    } else {
+      const tmp = path.join(os.tmpdir(), `recdrop-${Date.now()}.wav`);
+      fs.writeFileSync(tmp, wav);
+      try {
+        const codec =
+          ext === 'mp3'
+            ? ['-c:a', 'libmp3lame', '-b:a', '320k'] // highest MP3 quality
+            : ['-c:a', 'aac', '-b:a', '256k', '-movflags', '+faststart'];
+        await runFfmpeg(['-y', '-hide_banner', '-loglevel', 'error', '-i', tmp, '-vn', ...codec, '-f', ext, tmpOut]);
+      } finally {
+        fs.rmSync(tmp, { force: true });
+      }
+    }
+    fs.renameSync(tmpOut, outPath);
+  } catch (err) {
+    fs.rmSync(tmpOut, { force: true });
+    if (err.code === 'EBUSY' || err.code === 'EPERM') throw new Error('The file is open in another program. Close it and try again.');
+    throw err;
+  }
+  if (replacePath && !samePath(outPath, replacePath)) fs.rmSync(replacePath, { force: true });
+
+  cacheIcon(outPath);
+  return { canceled: false, filePath: outPath, size: fs.statSync(outPath).size };
 });
+
+// Renames a saved file in place (keeps its extension). Never overwrites another file.
+ipcMain.handle('file:rename', (_e, { filePath, name }) => {
+  const base = cleanName(name);
+  if (!base) throw new Error('Please enter a file name.');
+  const { dir, ext } = path.parse(filePath);
+  const target = path.join(dir, base + ext);
+  if (target === filePath) return { filePath };
+  // A different file already has that name (a case-only change is fine).
+  if (fs.existsSync(target) && !samePath(target, filePath)) throw new Error(`"${base}${ext}" already exists.`);
+  try {
+    fs.renameSync(filePath, target);
+  } catch (err) {
+    if (err.code === 'EBUSY' || err.code === 'EPERM') throw new Error('The file is open in another program. Close it and try again.');
+    throw err;
+  }
+  cacheIcon(target);
+  return { filePath: target };
+});
+
+// Moves a file to the Recycle Bin (recoverable).
+ipcMain.handle('file:trash', (_e, filePath) => shell.trashItem(filePath));
+
+// Puts the file itself on the clipboard, like Ctrl+C in Explorer, so it can be pasted into chats, emails or folders.
+ipcMain.handle('file:copy', (_e, filePath) => {
+  if (process.platform !== 'win32') {
+    require('electron').clipboard.writeText(filePath);
+    return;
+  }
+  return new Promise((resolve, reject) => {
+    execFile(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        // File drop list, like Explorer's Ctrl+C. Retries if another program is holding the clipboard.
+        'Add-Type -AssemblyName System.Windows.Forms;' +
+          '$c = New-Object System.Collections.Specialized.StringCollection; [void]$c.Add($env:RECDROP_COPY);' +
+          '$d = New-Object System.Windows.Forms.DataObject; $d.SetFileDropList($c);' +
+          '[System.Windows.Forms.Clipboard]::SetDataObject($d, $true, 10, 100)',
+      ],
+      { windowsHide: true, env: { ...process.env, RECDROP_COPY: filePath } },
+      (err) => (err ? reject(new Error('Could not copy the file.')) : resolve())
+    );
+  });
+});
+
+// Drag the file out of the app into Explorer, a chat, an email…
+const fileIcons = new Map();
+const fallbackIcon = nativeImage.createFromPath(path.join(__dirname, 'drag-icon.png'));
+function cacheIcon(filePath) {
+  app.getFileIcon(filePath, { size: 'normal' }).then((img) => fileIcons.set(filePath, img)).catch(() => {});
+}
+ipcMain.on('file:startDrag', (e, filePath) => {
+  if (!fs.existsSync(filePath)) return;
+  const icon = fileIcons.get(filePath);
+  e.sender.startDrag({ file: filePath, icon: icon && !icon.isEmpty() ? icon : fallbackIcon });
+});
+
+const samePath = (a, b) => path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
 
 function defaultName() {
   const d = new Date();

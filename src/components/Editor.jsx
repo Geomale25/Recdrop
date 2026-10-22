@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { encodeWav } from '../lib/wav.js';
-import { autoName, formatTime } from '../lib/format.js';
+import { autoName, errorText, formatTime } from '../lib/format.js';
 import { computePeaks, maxPeak } from '../lib/peaks.js';
 import { FitIcon, PauseIcon, PlayIcon, ZoomInIcon, ZoomOutIcon } from './Icons.jsx';
 
@@ -35,17 +35,23 @@ function drawBars(canvas, width, peaks, scale, barW, gap, isOn, colors) {
   }
 }
 
-export default function Editor({ buffer, onSaved, onDiscard }) {
+// mode "crop": crops the saved file (clip.filePath) and replaces it.
+// mode "new":  the recording isn't saved yet (automatic save failed); pick a name and save it.
+export default function Editor({ mode, clip, onSaved, onCancel, initialError = '' }) {
+  const { buffer } = clip;
   const duration = buffer.duration;
-  const [start, setStart] = useState(0);
-  const [end, setEnd] = useState(duration);
+  const cropping = mode === 'crop';
+  const fileName = clip.filePath?.split(/[\\/]/).pop() || '';
+  const origFormat = cropping ? fileName.split('.').pop().toLowerCase() : 'mp3';
+  const [start, setStart] = useState(clip.start ?? 0);
+  const [end, setEnd] = useState(clip.end ?? duration);
   const [view, setView] = useState({ start: 0, end: duration });
   const [playing, setPlaying] = useState(false);
-  const [playhead, setPlayhead] = useState(0);
+  const [playhead, setPlayhead] = useState(clip.start ?? 0);
   const [name, setName] = useState('');
-  const [format, setFormat] = useState('mp3');
+  const [format, setFormat] = useState(origFormat);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState(initialError);
   const [width, setWidth] = useState(0);
 
   const placeholder = useMemo(() => autoName(), []);
@@ -58,7 +64,7 @@ export default function Editor({ buffer, onSaved, onDiscard }) {
   const raf = useRef(0);
   const dragging = useRef(null);
   const ovDrag = useRef(null);
-  const sel = useRef({ start: 0, end: duration });
+  const sel = useRef({ start, end });
   sel.current = { start, end };
   const viewRef = useRef(view);
   viewRef.current = view;
@@ -343,23 +349,21 @@ export default function Editor({ buffer, onSaved, onDiscard }) {
     setError('');
     try {
       const wavBuffer = encodeWav(buffer, start, end);
-      const res = await window.api.saveFile({ wavBuffer, name: name.trim() || placeholder, format });
-      if (res?.canceled) {
-        setSaving(false);
-        return;
-      }
-      onSaved(res.filePath);
+      const res = cropping
+        ? await window.api.saveFile({ wavBuffer, format, replacePath: clip.filePath })
+        : await window.api.saveFile({ wavBuffer, name: name.trim() || placeholder, format });
+      onSaved({ start, end, format, filePath: res.filePath, size: res.size });
     } catch (err) {
       console.error(err);
-      setError('Saving failed: ' + (err?.message || err));
+      setError('Saving failed: ' + errorText(err));
       setSaving(false);
     }
   }
 
-  function discard() {
-    if (window.confirm('Discard this recording? It has not been saved.')) {
+  function cancel() {
+    if (cropping || window.confirm('Discard this recording? It has not been saved.')) {
       stopPlayback();
-      onDiscard();
+      onCancel();
     }
   }
 
@@ -369,6 +373,9 @@ export default function Editor({ buffer, onSaved, onDiscard }) {
   const inView = (t) => t >= view.start - 1e-9 && t <= view.end + 1e-9;
   const ovPct = (t) => `${(t / duration) * 100}%`;
   const trimmed = start > 0.001 || end < duration - 0.001;
+  // In crop mode there's nothing to save until the selection or format changes.
+  const changed =
+    !cropping || Math.abs(start - clip.start) > 0.001 || Math.abs(end - clip.end) > 0.001 || format !== origFormat;
   const zoomed = zoom > 1.001;
 
   return (
@@ -457,12 +464,17 @@ export default function Editor({ buffer, onSaved, onDiscard }) {
             <span className="accent">{formatTime(end - start, true)}</span>
           </div>
         </div>
-        <button className="ghost small" onClick={resetSelection} disabled={!trimmed}>
+        <button className="ghost small" onClick={resetSelection} disabled={!trimmed} title="Select the whole recording">
           Reset
         </button>
       </div>
 
       <div className="save-row">
+        {cropping ? (
+          <span className="save-note" title={fileName}>
+            Replaces <strong>{fileName}</strong>
+          </span>
+        ) : (
         <input
           className="name-input"
           type="text"
@@ -473,20 +485,27 @@ export default function Editor({ buffer, onSaved, onDiscard }) {
           spellCheck={false}
           aria-label="File name"
         />
+        )}
         <select value={format} onChange={(e) => setFormat(e.target.value)} aria-label="File format">
           <option value="mp3">MP3</option>
           <option value="mp4">MP4</option>
           <option value="wav">WAV</option>
         </select>
-        <button className="primary" onClick={save} disabled={saving}>
-          {saving ? 'Saving…' : 'Save'}
+        <button className="primary" onClick={save} disabled={saving || !changed}>
+          {saving ? 'Saving…' : cropping ? 'Save crop' : 'Save'}
         </button>
       </div>
 
       <div className="editor-foot">
-        <button className="ghost danger small" onClick={discard} disabled={saving}>
-          Discard recording
-        </button>
+        {cropping ? (
+          <button className="ghost small" onClick={cancel} disabled={saving}>
+            Cancel
+          </button>
+        ) : (
+          <button className="ghost danger small" onClick={cancel} disabled={saving}>
+            Discard recording
+          </button>
+        )}
         {error && <span className="error-text">{error}</span>}
       </div>
     </div>

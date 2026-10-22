@@ -68,3 +68,45 @@ export const FolderIcon = () => (
     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
   </svg>
 );
+
+export const CheckIcon = () => (
+  <svg {...base} width={16} height={16} strokeWidth={2.6}>
+    <path d="M4.5 12.5l5 5 10-11" />
+  </svg>
+);
+
+export const CopyIcon = () => (
+  <svg {...base} width={18} height={18}>
+    <rect x="8" y="8" width="13" height="13" rx="2.5" />
+    <path d="M16 8V5.5A2.5 2.5 0 0 0 13.5 3h-8A2.5 2.5 0 0 0 3 5.5v8A2.5 2.5 0 0 0 5.5 16H8" />
+  </svg>
+);
+
+export const CropIcon = () => (
+  <svg {...base} width={18} height={18}>
+    <path d="M6 2v14a2 2 0 0 0 2 2h14M18 22V8a2 2 0 0 0-2-2H2" />
+  </svg>
+);
+
+export const PlusIcon = () => (
+  <svg {...base} width={18} height={18} strokeWidth={2.4}>
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
+
+export const GripIcon = () => (
+  <svg {...base} width={16} height={16} fill="currentColor" stroke="none">
+    <circle cx="9" cy="6" r="1.6" />
+    <circle cx="15" cy="6" r="1.6" />
+    <circle cx="9" cy="12" r="1.6" />
+    <circle cx="15" cy="12" r="1.6" />
+    <circle cx="9" cy="18" r="1.6" />
+    <circle cx="15" cy="18" r="1.6" />
+  </svg>
+);
+
+export const PencilIcon = () => (
+  <svg {...base} width={14} height={14}>
+    <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />
+  </svg>
+);

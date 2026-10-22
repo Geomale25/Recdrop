@@ -11,3 +11,13 @@ export function autoName() {
   const p = (n) => String(n).padStart(2, '0');
   return `Recording ${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
 }
+
+export function formatSize(bytes) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Errors from the desktop side arrive as "Error invoking remote method 'x': Error: message".
+export function errorText(err) {
+  return String(err?.message || err).replace(/^Error invoking remote method '[^']+': (\w*Error: )?/, '');
+}

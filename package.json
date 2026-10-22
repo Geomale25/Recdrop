@@ -1,7 +1,7 @@
 {
-  "name": "sound-recorder",
-  "productName": "Sound Recorder",
-  "version": "1.0.0",
+  "name": "recdrop",
+  "productName": "Recdrop",
+  "version": "1.1.0",
   "description": "Record system audio, crop it and save it.",
   "author": "gemalez25",
   "license": "MIT",
@@ -15,8 +15,8 @@
     "test:e2e": "node tests/e2e-installed.mjs"
   },
   "build": {
-    "appId": "com.gemalez.soundrecorder",
-    "productName": "Sound Recorder",
+    "appId": "com.gemalez.recdrop",
+    "productName": "Recdrop",
     "directories": {
       "output": "release"
     },

@@ -56,9 +56,7 @@ export default function Recorder({ onRecorded, notice, onDismissNotice }) {
     setStatus('processing');
     try {
       const buffer = await s.stop();
-      setStatus('idle');
-      setElapsed(0);
-      onRecorded(buffer);
+      await onRecorded(buffer); // saves the file and switches to the Saved screen
     } catch (err) {
       console.error(err);
       setStatus('idle');
@@ -122,18 +120,13 @@ export default function Recorder({ onRecorded, notice, onDismissNotice }) {
         {status === 'idle' && 'Click to record everything playing on your computer'}
         {status === 'starting' && 'Starting…'}
         {status === 'recording' && (micOn ? 'Recording system audio + microphone' : 'Recording system audio · mic muted')}
-        {status === 'processing' && 'Preparing editor…'}
+        {status === 'processing' && 'Saving…'}
       </div>
 
       {error && <div className="toast error">{error}</div>}
       {notice && !error && (
-        <div className="toast success">
-          <span>
-            Saved <strong>{notice.fileName}</strong>
-          </span>
-          <button className="link" onClick={() => window.api.showInFolder(notice.filePath)}>
-            Show in folder
-          </button>
+        <div className="toast">
+          <span>{notice}</span>
           <button className="link muted" onClick={onDismissNotice} aria-label="Dismiss">
             ✕
           </button>
